@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lista de Presença Complementar - CCB</title>
+    <script type="module" id="firebaseModule">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, doc, getDoc, setDoc, collection, addDoc, serverTimestamp }
+        from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyD-SxtSQYKkfbT7dZXthECWGPuEVcBfadk",
+        authDomain: "farol-de-presenca.firebaseapp.com",
+        projectId: "farol-de-presenca",
+        storageBucket: "farol-de-presenca.firebasestorage.app",
+        messagingSenderId: "1082233137608",
+        appId: "1:1082233137608:web:8925f4f33ac11d750e38fd"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Cargos que NÃO devem aparecer no autocomplete
+    const CARGOS_EXCLUIDOS = [
+        'ancião', 'anciao',
+        'diácono', 'diacono',
+        'cooperador', // cooperador de jovens, cooperador ofício
+        'administrador', 'administração', 'administracao',
+        'conselho fiscal', 'suplente do conselho',
+        'encarregado'
+    ];
+
+    function cargoExcluido(cargo) {
+        if (!cargo) return false;
+        const c = cargo.toLowerCase();
+        return CARGOS_EXCLUIDOS.some(ex => c.includes(ex));
+    }
+
+    window._fb = {
+        db,
+        async carregarReuniaoAtiva() {
+            const snap = await getDoc(doc(db, "sistema", "reuniao_ativa"));
+            return snap.exists() ? snap.data() : null;
+        },
+        async carregarCadastro() {
+            const snap = await getDoc(doc(db, "sistema", "dados_principais"));
+            if (!snap.exists()) return [];
+            const dados = snap.data();
+            const pessoas = (dados.cadastroPessoas || []).filter(p => !cargoExcluido(p.cargo));
+            return pessoas.map(p => p.nome).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+        },
+        async registrarPresenca(payload) {
+            // 1. Salvar no log de presenças complementares
+            await addDoc(collection(db, "presencas_complementares"), {
+                ...payload,
+                timestamp: new Date().toISOString()
+            });
+
+            // 2. Atualizar o farol de presença (dados_principais)
+            const snap = await getDoc(doc(db, "sistema", "dados_principais"));
+            if (!snap.exists()) return;
+            const dados = snap.data();
+
+            const tipo = payload.tipoReuniao.toLowerCase(); // 'rma','ra','raec'
+            const dataKey = tipo + 'Data';
+            const dataObj = dados[dataKey] || { months: [], history: [] };
+            const monthYear = payload.monthYear;
+
+            // Garantir que o mês existe
+            if (!dataObj.months.includes(monthYear)) {
+                dataObj.months.push(monthYear);
+                const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                               'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+                dataObj.months.sort((a, b) => {
+                    const [mA, yA] = a.split(' de ');
+                    const [mB, yB] = b.split(' de ');
+                    return (MESES.indexOf(mA) + parseInt(yA)*12) - (MESES.indexOf(mB) + parseInt(yB)*12);
+                });
+            }
+
+            // Verificar se a pessoa já tem presença registrada para evitar duplicata
+            const jaRegistrado = dataObj.history.some(h =>
+                h.monthYear === monthYear &&
+                h.nome.toLowerCase().trim() === payload.nome.toLowerCase().trim() &&
+                h.presente === true
+            );
+
+            if (!jaRegistrado) {
+                dataObj.history.push({
+                    monthYear,
+                    nome: payload.nome,
+                    cargo: payload.area || 'Colaborador',
+                    localidade: '',
+                    cidade: '',
+                    presente: true,
+                    id: Date.now() + Math.random(),
+                    origemComplementar: true
+                });
+                dados[dataKey] = dataObj;
+                await setDoc(doc(db, "sistema", "dados_principais"), {
+                    ...dados,
+                    ultimaAtualizacao: new Date().toISOString()
+                });
+            }
+        }
+    };
+
+    window._fbReady = true;
+    document.dispatchEvent(new Event("fbReady"));
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(145deg, #1a2a3a 0%, #1e3a5f 40%, #16304a 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.35);
+            width: 100%;
+            max-width: 520px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #1a2a3a 0%, #2c3e50 60%, #1a3a4a 100%);
+            padding: 28px 28px 22px;
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card-header::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(ellipse at 20% 50%, rgba(52,152,219,0.2) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 50%, rgba(26,188,156,0.14) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .header-top {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 14px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .header-icon {
+            width: 48px; height: 48px;
+            background: rgba(255,255,255,0.13);
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 26px;
+            flex-shrink: 0;
+        }
+
+        .header-text h1 {
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .header-text p {
+            font-size: 11px;
+            color: rgba(255,255,255,0.7);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-top: 3px;
+        }
+
+        .reunion-badge {
+            position: relative;
+            z-index: 1;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 10px;
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .reunion-badge .badge-icon { font-size: 22px; }
+
+        .reunion-badge .badge-info .label {
+            font-size: 10px;
+            color: rgba(255,255,255,0.65);
+            text-transform: uppercase;
+            letter-spacing: 0.7px;
+            margin-bottom: 3px;
+        }
+
+        .reunion-badge .badge-info .value {
+            font-size: 15px;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .reunion-badge .badge-info .sub {
+            font-size: 11px;
+            color: rgba(255,255,255,0.75);
+            margin-top: 2px;
+        }
+
+        .badge-tipo {
+            margin-left: auto;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-tipo.rma { background: #f093fb; color: #4a0050; }
+        .badge-tipo.ra  { background: #4facfe; color: #002a5e; }
+        .badge-tipo.raec { background: #43e97b; color: #003820; }
+        .badge-tipo.rmc { background: #f5a623; color: #5a3200; }
+
+        .card-body { padding: 28px; }
+
+        .form-group { margin-bottom: 20px; }
+
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 700;
+            color: #34495e;
+            margin-bottom: 7px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-group label span.req { color: #e74c3c; margin-left: 3px; }
+
+        .input-wrap { position: relative; }
+
+        .input-wrap input, .input-wrap select, .input-wrap textarea {
+            width: 100%;
+            padding: 12px 14px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 15px;
+            font-family: Arial, sans-serif;
+            color: #2c3e50;
+            background: #fafafa;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            outline: none;
+        }
+
+        .input-wrap input:focus, .input-wrap select:focus, .input-wrap textarea:focus {
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52,152,219,0.15);
+            background: #fff;
+        }
+
+        /* Autocomplete dropdown */
+        .autocomplete-list {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0; right: 0;
+            background: white;
+            border: 2px solid #3498db;
+            border-radius: 8px;
+            max-height: 220px;
+            overflow-y: auto;
+            z-index: 100;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+            display: none;
+        }
+
+        .autocomplete-list.show { display: block; }
+
+        .autocomplete-item {
+            padding: 10px 14px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.15s;
+            color: #2c3e50;
+        }
+
+        .autocomplete-item:hover, .autocomplete-item.selected {
+            background: #eaf4fd;
+            color: #1a7fc4;
+        }
+
+        .autocomplete-item mark {
+            background: #ffe082;
+            font-weight: bold;
+            border-radius: 2px;
+        }
+
+        .tag-cadastrado {
+            display: inline-block;
+            background: #eafaf1;
+            color: #27ae60;
+            border: 1px solid #a9dfbf;
+            border-radius: 20px;
+            padding: 2px 10px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .tag-manual {
+            display: inline-block;
+            background: #fef9e7;
+            color: #d68910;
+            border: 1px solid #f9e79f;
+            border-radius: 20px;
+            padding: 2px 10px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #27ae60, #1e8449);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            letter-spacing: 0.3px;
+        }
+
+        .btn-submit:hover:not(:disabled) {
+            background: linear-gradient(135deg, #229954, #196f3d);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(39,174,96,0.4);
+        }
+
+        .btn-submit:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Estado de carregamento */
+        #loadingState {
+            text-align: center;
+            padding: 40px 28px;
+            color: #7f8c8d;
+        }
+
+        .spinner {
+            width: 42px; height: 42px;
+            border: 4px solid #ecf0f1;
+            border-top-color: #3498db;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Toast de sucesso / erro */
+        #toast {
+            display: none;
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 14px 28px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            z-index: 9999;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+            animation: fadeInUp 0.3s ease;
+            text-align: center;
+            max-width: 90vw;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+            to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+
+        #toast.success { background: #27ae60; color: white; }
+        #toast.error   { background: #e74c3c; color: white; }
+        #toast.warning { background: #f39c12; color: white; }
+
+        /* Tela de sucesso final */
+        #successScreen {
+            display: none;
+            padding: 50px 28px;
+            text-align: center;
+        }
+
+        .success-icon {
+            font-size: 72px;
+            margin-bottom: 16px;
+            animation: popIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        @keyframes popIn {
+            from { transform: scale(0); }
+            to   { transform: scale(1); }
+        }
+
+        .success-title {
+            font-size: 22px;
+            font-weight: 700;
+            color: #27ae60;
+            margin-bottom: 8px;
+        }
+
+        .success-desc {
+            font-size: 14px;
+            color: #7f8c8d;
+            line-height: 1.6;
+        }
+
+        .success-detail {
+            margin-top: 20px;
+            background: #f4f6f8;
+            border-radius: 10px;
+            padding: 14px 18px;
+            text-align: left;
+        }
+
+        .success-detail .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #ecf0f1;
+            font-size: 13px;
+        }
+
+        .success-detail .row:last-child { border: none; }
+        .success-detail .row .key { color: #7f8c8d; }
+        .success-detail .row .val { font-weight: 600; color: #2c3e50; }
+
+        .btn-novo {
+            margin-top: 24px;
+            padding: 12px 32px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-novo:hover {
+            background: #2980b9;
+        }
+
+        /* Sem reunião ativa */
+        #noReunion {
+            display: none;
+            padding: 50px 28px;
+            text-align: center;
+        }
+
+        .no-reunion-icon { font-size: 60px; margin-bottom: 16px; }
+        .no-reunion-title { font-size: 18px; font-weight: 700; color: #e74c3c; margin-bottom: 8px; }
+        .no-reunion-desc { font-size: 13px; color: #7f8c8d; line-height: 1.6; }
+
+        .divider {
+            height: 1px;
+            background: #ecf0f1;
+            margin: 4px 0 20px;
+        }
+
+        .hint {
+            font-size: 11px;
+            color: #aaa;
+            margin-top: 5px;
+        }
+
+        @media (max-width: 480px) {
+            body { padding: 12px; align-items: flex-start; }
+            .card-body { padding: 20px; }
+            .card-header { padding: 20px 20px 16px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <!-- Header -->
+    <div class="card-header">
+        <div class="header-top">
+            <div class="header-icon">📋</div>
+            <div class="header-text">
+                <h1>Lista de Presença Complementar</h1>
+                <p>Setor Musical · Colaboradores · Outros</p>
+            </div>
+        </div>
+        <div class="reunion-badge" id="reuniaoInfo" style="display:none;">
+            <div class="badge-icon">📅</div>
+            <div class="badge-info">
+                <div class="label">Reunião ativa</div>
+                <div class="value" id="reuniaoNome">—</div>
+                <div class="sub" id="reuniaoData">—</div>
+            </div>
+            <div class="badge-tipo" id="reuniaoBadge">—</div>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div id="loadingState">
+        <div class="spinner"></div>
+        <div>Carregando informações...</div>
+    </div>
+
+    <!-- Sem reunião ativa -->
+    <div id="noReunion">
+        <div class="no-reunion-icon">🔒</div>
+        <div class="no-reunion-title">Nenhuma reunião ativa</div>
+        <div class="no-reunion-desc">
+            O responsável ainda não configurou a reunião ativa.<br>
+            Por favor, aguarde ou entre em contato com o secretário.
+        </div>
+    </div>
+
+    <!-- Formulário -->
+    <div id="formSection" style="display:none;">
+        <div class="card-body">
+
+            <!-- Nome completo -->
+            <div class="form-group">
+                <label>Nome completo <span class="req">*</span>
+                    <span id="tagCadastrado" class="tag-cadastrado" style="display:none;">✓ Cadastrado</span>
+                    <span id="tagManual" class="tag-manual" style="display:none;">✎ Novo</span>
+                </label>
+                <div class="input-wrap" id="nomeWrap">
+                    <input
+                        type="text"
+                        id="nomeInput"
+                        placeholder="Digite seu nome completo..."
+                        autocomplete="off"
+                        spellcheck="false"
+                    />
+                    <div class="autocomplete-list" id="autocompleteList"></div>
+                </div>
+                <div class="hint">Se você já está cadastrado no sistema, seu nome aparecerá nas sugestões.</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <!-- Área / Setor -->
+            <div class="form-group">
+                <label>Área / Setor <span class="req">*</span></label>
+                <div class="input-wrap">
+                    <select id="areaSelect">
+                        <option value="">— Selecione sua área —</option>
+                        <option value="Setor Musical">🎵 Setor Musical</option>
+                        <option value="Segurança">🔒 Segurança</option>
+                        <option value="Compras">🛒 Compras</option>
+                        <option value="CCLIMP">🧹 CCLIMP</option>
+                        <option value="Engenharia">⚙️ Engenharia</option>
+                        <option value="Patrimônio">🏛️ Patrimônio</option>
+                        <option value="Outros">📝 Outros</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Campo "Outros" - aparece condicionalmente -->
+            <div class="form-group" id="outrosGrupo" style="display:none;">
+                <label>Especifique sua área <span class="req">*</span></label>
+                <div class="input-wrap">
+                    <input
+                        type="text"
+                        id="outrosInput"
+                        placeholder="Descreva sua área ou função..."
+                        maxlength="80"
+                    />
+                </div>
+            </div>
+
+            <!-- Botão enviar -->
+            <button class="btn-submit" id="btnEnviar" onclick="enviarPresenca()" disabled>
+                ✅ Confirmar Presença
+            </button>
+
+        </div>
+    </div>
+
+    <!-- Tela de sucesso -->
+    <div id="successScreen">
+        <div class="success-icon">🎉</div>
+        <div class="success-title">Presença registrada!</div>
+        <div class="success-desc">Sua presença foi confirmada com sucesso.</div>
+        <div class="success-detail" id="successDetail"></div>
+        <div id="countdownMsg" style="margin-top:22px; font-size:13px; color:#aaa;">
+            Voltando ao início em <strong id="countdownNum">5</strong>s...
+        </div>
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── Estado ──────────────────────────────────────────────────
+let nomesCarregados = [];
+let nomeSelecionadoCadastro = false;
+let reuniaoAtiva = null;
+let autocompleteIndex = -1;
+
+// ── Inicializar após Firebase estar pronto ───────────────────
+function init() {
+    if (!window._fbReady) {
+        document.addEventListener('fbReady', init);
+        return;
+    }
+    carregarDados();
+}
+
+async function carregarDados() {
+    try {
+        const [reuniao, nomes] = await Promise.all([
+            window._fb.carregarReuniaoAtiva(),
+            window._fb.carregarCadastro()
+        ]);
+
+        nomesCarregados = nomes;
+
+        if (!reuniao || !reuniao.ativo) {
+            mostrar('noReunion');
+            return;
+        }
+
+        reuniaoAtiva = reuniao;
+        preencherHeaderReuniao(reuniao);
+        mostrar('formSection');
+        configurarFormulario();
+
+    } catch (e) {
+        console.error(e);
+        mostrar('noReunion');
+        showToast('Erro ao carregar dados. Tente novamente.', 'error');
+    }
+}
+
+function preencherHeaderReuniao(r) {
+    document.getElementById('reuniaoInfo').style.display = 'flex';
+    document.getElementById('reuniaoNome').textContent = r.descricao || r.tipo;
+    document.getElementById('reuniaoData').textContent = formatarData(r.data) + (r.monthYear ? ' · ' + r.monthYear : '');
+    const badge = document.getElementById('reuniaoBadge');
+    badge.textContent = (r.tipo || '').toUpperCase();
+    badge.className = 'badge-tipo ' + (r.tipo || '').toLowerCase();
+}
+
+function formatarData(str) {
+    if (!str) return '';
+    // str pode ser "2025-05-14" ou "14/05/2025"
+    try {
+        const parts = str.includes('-') ? str.split('-') : str.split('/').reverse();
+        const d = new Date(parts[0], parts[1]-1, parts[2]);
+        return d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+    } catch { return str; }
+}
+
+function mostrar(id) {
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('noReunion').style.display = 'none';
+    document.getElementById('formSection').style.display = 'none';
+    document.getElementById('successScreen').style.display = 'none';
+    document.getElementById(id).style.display = 'block';
+}
+
+// ── Configurar formulário ────────────────────────────────────
+function configurarFormulario() {
+    const nomeInput = document.getElementById('nomeInput');
+    const areaSelect = document.getElementById('areaSelect');
+    const outrosGrupo = document.getElementById('outrosGrupo');
+    const outrosInput = document.getElementById('outrosInput');
+
+    // Autocomplete no campo nome
+    nomeInput.addEventListener('input', () => {
+        nomeSelecionadoCadastro = false;
+        atualizarTagNome(false);
+        const val = nomeInput.value.trim();
+        if (val.length < 2) {
+            fecharAutocomplete();
+        } else {
+            mostrarSugestoes(val);
+        }
+        validarFormulario();
+    });
+
+    nomeInput.addEventListener('keydown', (e) => {
+        const lista = document.getElementById('autocompleteList');
+        const items = lista.querySelectorAll('.autocomplete-item');
+        if (!lista.classList.contains('show') || items.length === 0) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            autocompleteIndex = Math.min(autocompleteIndex + 1, items.length - 1);
+            atualizarSelecaoAutocomplete(items);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            autocompleteIndex = Math.max(autocompleteIndex - 1, 0);
+            atualizarSelecaoAutocomplete(items);
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (autocompleteIndex >= 0) items[autocompleteIndex].click();
+        } else if (e.key === 'Escape') {
+            fecharAutocomplete();
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!document.getElementById('nomeWrap').contains(e.target)) fecharAutocomplete();
+    });
+
+    // Dropdown área
+    areaSelect.addEventListener('change', () => {
+        if (areaSelect.value === 'Outros') {
+            outrosGrupo.style.display = 'block';
+            outrosInput.focus();
+        } else {
+            outrosGrupo.style.display = 'none';
+            outrosInput.value = '';
+        }
+        validarFormulario();
+    });
+
+    outrosInput.addEventListener('input', validarFormulario);
+}
+
+// ── Autocomplete ─────────────────────────────────────────────
+function mostrarSugestoes(query) {
+    const q = query.toLowerCase();
+    const filtrados = nomesCarregados.filter(n => n.toLowerCase().includes(q)).slice(0, 8);
+    const lista = document.getElementById('autocompleteList');
+    autocompleteIndex = -1;
+
+    if (filtrados.length === 0) {
+        fecharAutocomplete();
+        return;
+    }
+
+    lista.innerHTML = filtrados.map(nome => {
+        const idx = nome.toLowerCase().indexOf(q);
+        const highlighted = nome.slice(0, idx) + '<mark>' + nome.slice(idx, idx + q.length) + '</mark>' + nome.slice(idx + q.length);
+        return `<div class="autocomplete-item" onclick="selecionarNome('${nome.replace(/'/g,"\\'")}')">
+            ${highlighted}
+        </div>`;
+    }).join('');
+
+    lista.classList.add('show');
+}
+
+function selecionarNome(nome) {
+    document.getElementById('nomeInput').value = nome;
+    nomeSelecionadoCadastro = true;
+    atualizarTagNome(true);
+    fecharAutocomplete();
+    validarFormulario();
+    document.getElementById('areaSelect').focus();
+}
+
+function fecharAutocomplete() {
+    document.getElementById('autocompleteList').classList.remove('show');
+    autocompleteIndex = -1;
+}
+
+function atualizarSelecaoAutocomplete(items) {
+    items.forEach((item, i) => {
+        item.classList.toggle('selected', i === autocompleteIndex);
+        if (i === autocompleteIndex) item.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+function atualizarTagNome(cadastrado) {
+    document.getElementById('tagCadastrado').style.display = cadastrado ? 'inline-block' : 'none';
+    document.getElementById('tagManual').style.display = (!cadastrado && document.getElementById('nomeInput').value.trim().length > 2) ? 'inline-block' : 'none';
+}
+
+// ── Validação ────────────────────────────────────────────────
+function validarFormulario() {
+    const nome = document.getElementById('nomeInput').value.trim();
+    const area = document.getElementById('areaSelect').value;
+    const outros = document.getElementById('outrosInput').value.trim();
+
+    const valido = nome.length >= 3 && area && (area !== 'Outros' || outros.length >= 2);
+    document.getElementById('btnEnviar').disabled = !valido;
+}
+
+// ── Envio ─────────────────────────────────────────────────────
+async function enviarPresenca() {
+    const nome = document.getElementById('nomeInput').value.trim();
+    const area = document.getElementById('areaSelect').value;
+    const outros = document.getElementById('outrosInput').value.trim();
+    const areaFinal = area === 'Outros' ? outros : area;
+
+    if (!nome || !area || (area === 'Outros' && !outros)) {
+        showToast('Preencha todos os campos obrigatórios.', 'warning');
+        return;
+    }
+
+    const btn = document.getElementById('btnEnviar');
+    btn.disabled = true;
+    btn.textContent = '⏳ Registrando...';
+
+    try {
+        const payload = {
+            nome,
+            area: areaFinal,
+            tipoReuniao: reuniaoAtiva.tipo,
+            descricaoReuniao: reuniaoAtiva.descricao || reuniaoAtiva.tipo,
+            data: reuniaoAtiva.data,
+            monthYear: reuniaoAtiva.monthYear,
+            cadastrado: nomeSelecionadoCadastro,
+            registradoEm: new Date().toISOString()
+        };
+
+        await window._fb.registrarPresenca(payload);
+        mostrarSucesso(payload);
+
+    } catch (e) {
+        console.error(e);
+        showToast('Erro ao registrar presença. Tente novamente.', 'error');
+        btn.disabled = false;
+        btn.textContent = '✅ Confirmar Presença';
+    }
+}
+
+function mostrarSucesso(p) {
+    mostrar('successScreen');
+
+    // Determinar texto de registro
+    let registroHtml = '';
+    if (p.cadastrado) {
+        registroHtml = '<div class="row"><span class="key">Farol</span><span class="val" style="color:#27ae60;">✓ Presença marcada no Farol</span></div>';
+    } else {
+        registroHtml = '<div class="row"><span class="key">Registro</span><span class="val" style="color:#27ae60;">✓ Irmão(ã) adicionado(a) com sucesso</span></div>';
+    }
+
+    document.getElementById('successDetail').innerHTML = `
+        <div class="row"><span class="key">Nome</span><span class="val">${p.nome}</span></div>
+        <div class="row"><span class="key">Área</span><span class="val">${p.area}</span></div>
+        <div class="row"><span class="key">Reunião</span><span class="val">${p.descricaoReuniao}</span></div>
+        <div class="row"><span class="key">Data</span><span class="val">${formatarData(p.data)}</span></div>
+        <div class="row"><span class="key">Mês/Ano</span><span class="val">${p.monthYear}</span></div>
+        ${registroHtml}
+    `;
+
+    // Countdown de 5 segundos e volta para o formulário
+    let segundos = 5;
+    document.getElementById('countdownNum').textContent = segundos;
+    const timer = setInterval(() => {
+        segundos--;
+        const el = document.getElementById('countdownNum');
+        if (el) el.textContent = segundos;
+        if (segundos <= 0) {
+            clearInterval(timer);
+            novoRegistro();
+        }
+    }, 1000);
+}
+
+function novoRegistro() {
+    document.getElementById('nomeInput').value = '';
+    document.getElementById('areaSelect').value = '';
+    document.getElementById('outrosInput').value = '';
+    document.getElementById('outrosGrupo').style.display = 'none';
+    document.getElementById('tagCadastrado').style.display = 'none';
+    document.getElementById('tagManual').style.display = 'none';
+    nomeSelecionadoCadastro = false;
+    mostrar('formSection');
+    document.getElementById('btnEnviar').disabled = true;
+    document.getElementById('btnEnviar').textContent = '✅ Confirmar Presença';
+    document.getElementById('nomeInput').focus();
+}
+
+// ── Toast ────────────────────────────────────────────────────
+function showToast(msg, type = 'success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = type;
+    t.style.display = 'block';
+    setTimeout(() => { t.style.display = 'none'; }, 3500);
+}
+
+// ── Iniciar ──────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
